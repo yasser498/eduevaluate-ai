@@ -1,15 +1,15 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { FileUploader } from './components/FileUploader';
 import { Dashboard } from './components/Dashboard';
 import { TeacherReport } from './components/TeacherReport';
 import { AuditLogViewer } from './components/AuditLogViewer';
+import { ApiKeyModal } from './components/ApiKeyModal';
 import { Teacher, EvaluationCriteria } from './types';
 import { EVALUATION_CRITERIA } from './constants';
-import { analyzeTeacherPortfolio } from './services/geminiService';
+import { analyzeTeacherPortfolio, API_KEY_STORAGE_KEY } from './services/geminiService';
 import { logAction } from './services/auditService';
-import { LayoutDashboard, Users, FileText, CheckCircle2, Loader2, Sparkles, FolderOpen, Search, History, Printer, Settings, Key, AlertTriangle } from 'lucide-react';
-
-const TEACHERS_STORAGE_KEY = 'edu_evaluate_teachers_data';
+import { LayoutDashboard, Users, FileText, CheckCircle2, Loader2, Sparkles, FolderOpen, Search, History, Printer, Settings } from 'lucide-react';
 
 export default function App() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -18,35 +18,16 @@ export default function App() {
   const [processedCount, setProcessedCount] = useState(0);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'teachers'>('dashboard');
   const [showAuditLog, setShowAuditLog] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [isPrintingAll, setIsPrintingAll] = useState(false);
 
-  // PERSISTENCE: Load teachers from local storage on mount
+  // Check for API Key on mount
   useEffect(() => {
-    try {
-      const storedData = localStorage.getItem(TEACHERS_STORAGE_KEY);
-      if (storedData) {
-        const parsed: Teacher[] = JSON.parse(storedData);
-        // Note: fileObjects (actual Files) cannot be stored in localStorage.
-        // We restore the data structure, but status might need attention if user tries to re-analyze without re-upload.
-        setTeachers(parsed.map(t => ({...t, fileObjects: []})));
-      }
-    } catch (e) {
-      console.error("Failed to load teachers from storage", e);
+    const key = localStorage.getItem(API_KEY_STORAGE_KEY);
+    if (!key) {
+      setShowApiKeyModal(true);
     }
   }, []);
-
-  // PERSISTENCE: Save teachers to local storage whenever they change
-  useEffect(() => {
-    if (teachers.length > 0) {
-      // Remove fileObjects before saving to avoid cyclic errors and memory limits
-      const serializableTeachers = teachers.map(t => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { fileObjects, ...rest } = t;
-        return rest;
-      });
-      localStorage.setItem(TEACHERS_STORAGE_KEY, JSON.stringify(serializableTeachers));
-    }
-  }, [teachers]);
 
   // Helper to convert File to Base64 for Gemini
   const fileToGenerativePart = async (file: File) => {
@@ -67,14 +48,20 @@ export default function App() {
   };
 
   const processFiles = useCallback(async (fileList: FileList) => {
+    // Check key before starting
+    if (!localStorage.getItem(API_KEY_STORAGE_KEY)) {
+      setShowApiKeyModal(true);
+      return;
+    }
+
     setIsProcessing(true);
     setProcessedCount(0);
     const filesArray = Array.from(fileList);
     
     logAction('UPLOAD', `بدء معالجة مجلد جديد يحتوي على ${filesArray.length} ملف`);
 
-    // 1. Analyze New File Structure
-    const newTeacherMap = new Map<string, { paths: string[], files: File[] }>();
+    // Smart detection of folder structure + Keeping File Objects
+    const teacherMap = new Map<string, { paths: string[], files: File[] }>();
     
     if (filesArray.length > 0) {
       const rootFolderName = filesArray[0].webkitRelativePath.split('/')[0];
@@ -88,143 +75,97 @@ export default function App() {
             const teacherName = parts[1];
             const relativePath = parts.slice(2).join('/');
             
-            if (!newTeacherMap.has(teacherName)) {
-              newTeacherMap.set(teacherName, { paths: [], files: [] });
+            if (!teacherMap.has(teacherName)) {
+              teacherMap.set(teacherName, { paths: [], files: [] });
             }
-            newTeacherMap.get(teacherName)?.paths.push(relativePath);
-            newTeacherMap.get(teacherName)?.files.push(file);
+            teacherMap.get(teacherName)?.paths.push(relativePath);
+            teacherMap.get(teacherName)?.files.push(file);
           }
         });
       } else {
-        // Flat Structure fallback
+        // Flat Structure
         filesArray.forEach(file => {
           const parts = file.webkitRelativePath.split('/');
           if (parts.length > 1) {
              const teacherName = parts[0];
              const relativePath = parts.slice(1).join('/');
-             if (!newTeacherMap.has(teacherName)) {
-               newTeacherMap.set(teacherName, { paths: [], files: [] });
+             
+             if (!teacherMap.has(teacherName)) {
+               teacherMap.set(teacherName, { paths: [], files: [] });
              }
-             newTeacherMap.get(teacherName)?.paths.push(relativePath);
-             newTeacherMap.get(teacherName)?.files.push(file);
+             teacherMap.get(teacherName)?.paths.push(relativePath);
+             teacherMap.get(teacherName)?.files.push(file);
           }
         });
       }
     }
 
-    // 2. MERGE LOGIC: Merge new structure with existing data
-    setTeachers(prevTeachers => {
-      // Create a map of existing teachers for easy lookup
-      const existingMap = new Map(prevTeachers.map(t => [t.name, t]));
-      
-      const mergedTeachers: Teacher[] = [];
+    // Fallback for single folder upload
+    if (teacherMap.size === 0 && filesArray.length > 0) {
+       const rootName = filesArray[0].webkitRelativePath.split('/')[0];
+       const paths: string[] = [];
+       const fileObjs: File[] = [];
 
-      // Iterate through newly uploaded teachers
-      newTeacherMap.forEach((data, name) => {
-        if (existingMap.has(name)) {
-          // UPDATE EXISTING: Keep scores, update file list & objects
-          const existing = existingMap.get(name)!;
-          mergedTeachers.push({
-            ...existing,
-            files: data.paths, // Update file paths to match current disk state
-            fileObjects: data.files, // Refill file objects (important for re-analysis)
-            // Note: We keep existing status/scores. If user wants to re-analyze, they can trigger it manually later (feature for future) 
-            // or we can auto-trigger if file count changes drastically. 
-            // For now, we assume if it's 'completed', we keep the score.
-          });
-          // Remove from map so we know who is left
-          existingMap.delete(name);
-        } else {
-          // CREATE NEW
-          mergedTeachers.push({
-            id: `t-${Date.now()}-${Math.random()}`,
-            name,
-            folderPath: name,
-            files: data.paths,
-            fileObjects: data.files,
-            status: 'pending'
-          });
-        }
-      });
-
-      // What about teachers in 'existingMap' that were NOT in the new upload?
-      // We Keep them. This allows "Incremental Uploads" (e.g. uploading Dept A then Dept B).
-      existingMap.forEach((teacher) => {
-        mergedTeachers.push(teacher);
-      });
-
-      return mergedTeachers;
-    });
-
-    // 3. Identify Teachers that need analysis (Pending)
-    // We need to wait for state update, but we can calculate the list of "Pending" teachers from the merge logic conceptually.
-    // However, since we set state, we need to run the queue on the *newly created* pending items.
-    // We will do this by constructing the list here locally to start the queue.
-    
-    // Re-construct the list we just sent to state to identify pending ones
-    const teachersToProcess: Teacher[] = [];
-    newTeacherMap.forEach((data, name) => {
-       // Only process if it was new (not in teachers) or if we want to force re-process. 
-       // Currently, my merge logic above sets status to 'pending' ONLY for new teachers.
-       // Existing teachers keep their status.
-       // So we filter `teachers` to check.
-       const exists = teachers.find(t => t.name === name);
-       if (!exists) {
-          teachersToProcess.push({
-            id: `temp-${name}`, // ID doesn't matter for the queue local obj, but matters for state update
-            name,
-            folderPath: name,
-            files: data.paths,
-            fileObjects: data.files,
-            status: 'pending'
-          });
-       }
-    });
-    
-    logAction('SYSTEM', `تم تحديث البيانات: ${teachersToProcess.length} معلم جديد، ودمج بيانات الملفات للمعلمين السابقين.`);
-
-    if (teachersToProcess.length === 0) {
-      setIsProcessing(false);
-      return;
+       filesArray.forEach(f => {
+         const parts = f.webkitRelativePath.split('/');
+         paths.push(parts.slice(1).join('/'));
+         fileObjs.push(f);
+       });
+       teacherMap.set(rootName, { paths, files: fileObjs });
     }
 
-    logAction('ANALYSIS', `بدء التحليل الذكي لـ ${teachersToProcess.length} معلم جديد`);
+    const initialTeachers: Teacher[] = Array.from(teacherMap.entries()).map(([name, data], index) => ({
+      id: `t-${Date.now()}-${index}`,
+      name,
+      folderPath: name, 
+      files: data.paths,
+      fileObjects: data.files,
+      status: 'pending'
+    }));
+
+    setTeachers(initialTeachers);
+    logAction('SYSTEM', `تم التعرف على ${initialTeachers.length} معلم من هيكل المجلدات`);
 
     // BATCH PROCESSING QUEUE
-    const CONCURRENCY_LIMIT = 2; 
-    const queue = [...teachersToProcess];
+    const CONCURRENCY_LIMIT = 2; // Reduced slightly for content upload stability
+    const queue = [...initialTeachers];
     const activePromises: Promise<void>[] = [];
     
-    // Function to update a specific teacher in the global state
-    const updateTeacherState = (name: string, updates: Partial<Teacher>) => {
-      setTeachers(current => current.map(t => t.name === name ? { ...t, ...updates } : t));
-    };
+    logAction('ANALYSIS', `بدء التحليل الذكي لـ ${initialTeachers.length} معلم`);
 
-    const processTeacher = async (teacherTemp: Teacher) => {
-      updateTeacherState(teacherTemp.name, { status: 'analyzing' });
+    const processTeacher = async (teacher: Teacher) => {
+      // Update status to analyzing
+      setTeachers(prev => prev.map(t => t.id === teacher.id ? { ...t, status: 'analyzing' } : t));
+      
+      // --- SMART SAMPLING LOGIC ---
+      // We cannot upload 1GB of data. We select top 3 "High Value" files to read content from.
+      // Priority: PDFs, Images. Keywords: Report, Plan, Analysis.
       
       const keywords = [
         'report', 'plan', 'analysis', 'test', 'result', 'log', 'form', 'card', 'evidence',
         'تقرير', 'خطة', 'تحليل', 'نتائج', 'اختبار', 'سجل', 'كشف', 'استمارة', 'بطاقة', 'شواهد', 'إنجاز'
       ];
       
-      const candidateFiles = teacherTemp.fileObjects.filter(f => 
-        (f.type === 'application/pdf' || f.type.startsWith('image/')) && f.size < 4 * 1024 * 1024 
+      const candidateFiles = teacher.fileObjects.filter(f => 
+        (f.type === 'application/pdf' || f.type.startsWith('image/')) && f.size < 4 * 1024 * 1024 // Limit 4MB per file
       );
 
+      // Score files based on keyword matches
       const scoredFiles = candidateFiles.map(f => {
         let score = 0;
         const lowerName = f.name.toLowerCase();
         keywords.forEach(k => {
           if (lowerName.includes(k)) score += 10;
         });
-        if (f.type === 'application/pdf') score += 5; 
+        if (f.type === 'application/pdf') score += 5; // Prefer PDFs over images
         return { file: f, score };
       });
 
+      // Sort by score and take top 3
       scoredFiles.sort((a, b) => b.score - a.score);
       const topFiles = scoredFiles.slice(0, 3).map(item => item.file);
 
+      // Read content of top files
       let evidenceParts: any[] = [];
       try {
          evidenceParts = await Promise.all(topFiles.map(fileToGenerativePart));
@@ -232,30 +173,44 @@ export default function App() {
         console.error("Error reading file content", e);
       }
 
+      // Call Gemini with Metadata AND Content
       try {
-        const result = await analyzeTeacherPortfolio(teacherTemp.name, teacherTemp.files, evidenceParts);
+        const result = await analyzeTeacherPortfolio(teacher.name, teacher.files, evidenceParts);
         
+        // Calculate Weighted Score
         const totalScore = result.scores.reduce((sum, s) => {
           const criteria = EVALUATION_CRITERIA.find(c => c.id === s.criteriaId);
           const weight = criteria ? criteria.weight : 0;
-          return sum + ((s.score / 10) * weight);
+          const weightedScore = (s.score / 10) * weight;
+          return sum + weightedScore;
         }, 0);
 
-        updateTeacherState(teacherTemp.name, {
+        // Update with results
+        setTeachers(prev => prev.map(t => t.id === teacher.id ? {
+          ...t,
           scores: result.scores,
           aiAnalysis: result.summary,
           totalScore: Math.round(totalScore),
           status: 'completed'
-        });
-
+        } : t));
       } catch (error: any) {
-        console.error("Teacher analysis failed", error);
-        updateTeacherState(teacherTemp.name, { status: 'error' });
+        if (error.message === 'API_KEY_INVALID') {
+          // Pause queue and show modal
+          setIsProcessing(false);
+          setShowApiKeyModal(true);
+          // Reset status to pending to allow retry
+          setTeachers(prev => prev.map(t => t.id === teacher.id ? { ...t, status: 'pending' } : t));
+          throw error; // Stop this branch
+        } else {
+           // Handle generic error
+           setTeachers(prev => prev.map(t => t.id === teacher.id ? { ...t, status: 'error' } : t));
+        }
       }
 
       setProcessedCount(prev => prev + 1);
     };
 
+    // Queue Loop
     try {
       while (queue.length > 0 || activePromises.length > 0) {
         while (queue.length > 0 && activePromises.length < CONCURRENCY_LIMIT) {
@@ -263,31 +218,44 @@ export default function App() {
           const p = processTeacher(teacher).then(() => {
             activePromises.splice(activePromises.indexOf(p), 1);
           }).catch(() => {
+             // If error occurs (like API key invalid), we stop loop logic if needed, 
+             // but here we just remove from active
              activePromises.splice(activePromises.indexOf(p), 1);
           });
           activePromises.push(p as Promise<void>);
         }
-        if (activePromises.length > 0) await Promise.race(activePromises);
-        else break;
+        
+        if (activePromises.length > 0) {
+          await Promise.race(activePromises);
+        } else {
+          break;
+        }
       }
     } catch (e) {
       console.log("Queue stopped");
     }
 
-    logAction('ANALYSIS', 'اكتملت عملية التحليل للمعلمين الجدد');
+    logAction('ANALYSIS', 'اكتملت عملية التحليل لجميع المعلمين');
     setIsProcessing(false);
-  }, [teachers]); 
+  }, []);
 
   const handlePrintAll = () => {
     const completed = teachers.filter(t => t.status === 'completed');
     if (completed.length === 0) return;
+    
     logAction('REPORT', `طباعة مجمعة لجميع التقارير (${completed.length} معلم)`);
     setIsPrintingAll(true);
-    setTimeout(() => { window.print(); }, 1000);
+    
+    // Increased delay to allow full rendering of images/tables before print dialog
+    setTimeout(() => {
+      window.print();
+    }, 1000);
   };
 
   React.useEffect(() => {
-    const handleAfterPrint = () => { setIsPrintingAll(false); };
+    const handleAfterPrint = () => {
+      setIsPrintingAll(false);
+    };
     window.addEventListener('afterprint', handleAfterPrint);
     return () => window.removeEventListener('afterprint', handleAfterPrint);
   }, []);
@@ -295,7 +263,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
       
-      {/* --- BULK PRINT VIEW --- */}
+      {/* --- BULK PRINT VIEW (Visible ONLY when printing all) --- */}
       {isPrintingAll && (
         <div className="fixed inset-0 z-[9999] bg-white overflow-auto print:static print:block">
            {teachers.filter(t => t.status === 'completed').map((teacher) => (
@@ -304,11 +272,11 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MAIN APP LAYOUT --- */}
+      {/* --- MAIN APP LAYOUT (Hidden when printing all) --- */}
       <div className={`flex w-full ${isPrintingAll ? 'hidden print:hidden' : ''}`}>
         
         {/* Sidebar */}
-        <div className="w-64 bg-slate-900 text-slate-300 flex-shrink-0 hidden md:flex flex-col print:hidden shadow-xl z-20">
+        <div className="w-64 bg-slate-900 text-slate-300 flex-shrink-0 hidden md:flex flex-col print:hidden">
           <div className="p-6 border-b border-slate-800">
             <div className="flex items-center gap-2 text-white font-bold text-xl">
               <Sparkles className="w-6 h-6 text-indigo-400" />
@@ -317,7 +285,7 @@ export default function App() {
             <p className="text-xs text-slate-500 mt-1">منصة الإشراف الذكي</p>
           </div>
           
-          <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+          <nav className="flex-1 p-4 space-y-2">
             <button 
               onClick={() => setActiveTab('dashboard')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
@@ -351,6 +319,16 @@ export default function App() {
               سجل العمليات
             </button>
           </nav>
+
+          <div className="p-4 border-t border-slate-800">
+             <button 
+                onClick={() => setShowApiKeyModal(true)}
+                className="w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors hover:bg-slate-800 text-slate-400 hover:text-white text-sm"
+              >
+                <Settings className="w-4 h-4" />
+                إعدادات مفتاح API
+              </button>
+          </div>
         </div>
 
         {/* Main Content */}
@@ -363,6 +341,9 @@ export default function App() {
               EduEvaluate
             </div>
             <div className="flex gap-2">
+              <button onClick={() => setShowApiKeyModal(true)} className="p-2 text-slate-600">
+                <Settings className="w-5 h-5" />
+              </button>
               <button onClick={() => setShowAuditLog(true)} className="p-2 text-slate-600">
                 <History className="w-5 h-5" />
               </button>
@@ -388,10 +369,10 @@ export default function App() {
                 {teachers.length > 0 && !isProcessing && (
                   <button 
                     onClick={() => window.location.reload()}
-                    className="px-4 py-2 bg-white border border-slate-300 text-slate-600 rounded-lg text-sm hover:bg-slate-50 font-bold flex items-center gap-2 shadow-sm"
+                    className="px-4 py-2 bg-white border border-slate-300 text-slate-600 rounded-lg text-sm hover:bg-slate-50 font-bold flex items-center gap-2"
                   >
                     <FolderOpen className="w-4 h-4" />
-                    تحميل بيانات جديدة
+                    اختيار مجلد آخر
                   </button>
                 )}
               </div>
@@ -400,9 +381,6 @@ export default function App() {
               {teachers.length === 0 && !isProcessing ? (
                 <div className="max-w-2xl mx-auto mt-12">
                   <FileUploader onFilesSelected={processFiles} />
-                  <p className="text-center text-slate-400 text-sm mt-8">
-                    يتم حفظ البيانات تلقائياً. عند إعادة رفع المجلد، سيتم دمج الملفات الجديدة مع التقييمات المحفوظة.
-                  </p>
                 </div>
               ) : isProcessing ? (
                 <div className="flex flex-col items-center justify-center h-96">
@@ -411,15 +389,19 @@ export default function App() {
                   <p className="text-slate-500 mb-6 text-center max-w-md">
                     يقوم الذكاء الاصطناعي الآن بقراءة هيكل المجلدات وفحص <span className="text-indigo-600 font-bold">محتوى العينات</span> (PDF/صور) لتقييم الجودة.
                     <br/>
-                    <span className="text-xs text-slate-400 mt-2 block">تمت المعالجة: {processedCount} معلم</span>
+                    <span className="text-xs text-slate-400 mt-2 block">تمت المعالجة: {processedCount} من {teachers.length}</span>
                   </p>
                   
                   {/* Progress Bar */}
                   <div className="w-80 max-w-md" dir="ltr">
+                    <div className="flex justify-between text-xs text-slate-500 mb-2 px-1">
+                        <span>{processedCount} / {teachers.length}</span>
+                        <span>التقدم</span>
+                    </div>
                     <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
                         <div 
-                          className="h-full bg-indigo-600 transition-all duration-300 ease-out animate-pulse"
-                          style={{ width: `100%` }}
+                          className="h-full bg-indigo-600 transition-all duration-300 ease-out"
+                          style={{ width: `${(processedCount / teachers.length) * 100}%` }}
                         ></div>
                     </div>
                   </div>
@@ -456,18 +438,12 @@ export default function App() {
                                   {teacher.name.substring(0,2).toUpperCase()}
                                 </div>
                                 <div className="text-left">
-                                  {teacher.status === 'completed' ? (
-                                    <span className={`px-3 py-1 text-sm font-bold rounded-full block mb-1 ${
-                                      (teacher.totalScore || 0) >= 90 ? 'bg-emerald-100 text-emerald-700' : 
-                                      (teacher.totalScore || 0) >= 75 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
-                                    }`}>
-                                      {teacher.totalScore}%
-                                    </span>
-                                  ) : (
-                                    <span className="px-3 py-1 text-xs font-bold rounded-full block mb-1 bg-slate-100 text-slate-500">
-                                      {teacher.status === 'pending' ? 'بانتظار التحليل' : 'خطأ'}
-                                    </span>
-                                  )}
+                                  <span className={`px-3 py-1 text-sm font-bold rounded-full block mb-1 ${
+                                    (teacher.totalScore || 0) >= 90 ? 'bg-emerald-100 text-emerald-700' : 
+                                    (teacher.totalScore || 0) >= 75 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+                                  }`}>
+                                    {teacher.totalScore}%
+                                  </span>
                                 </div>
                               </div>
                               <h3 className="text-lg font-bold text-slate-900 truncate mb-1" title={teacher.name}>
@@ -484,13 +460,9 @@ export default function App() {
 
                               <div className="border-t border-slate-100 pt-4 flex items-center justify-between text-sm">
                                 <span className="text-slate-500 text-xs">تقييم الذكاء الاصطناعي</span>
-                                {teacher.status === 'completed' ? (
-                                  <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs uppercase tracking-wide">
-                                    <CheckCircle2 className="w-4 h-4" /> مكتمل
-                                  </span>
-                                ) : (
-                                  <span className="text-xs text-slate-400">-</span>
-                                )}
+                                <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs uppercase tracking-wide">
+                                  <CheckCircle2 className="w-4 h-4" /> مكتمل
+                                </span>
                               </div>
                             </div>
                             <div className="bg-indigo-50 p-3 text-center text-indigo-700 text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity">
@@ -520,6 +492,12 @@ export default function App() {
       {showAuditLog && !isPrintingAll && (
         <AuditLogViewer onClose={() => setShowAuditLog(false)} />
       )}
+
+      <ApiKeyModal 
+        isOpen={showApiKeyModal} 
+        onClose={() => setShowApiKeyModal(false)}
+        onSave={() => window.location.reload()} // Reload to refresh services if needed
+      />
 
     </div>
   );

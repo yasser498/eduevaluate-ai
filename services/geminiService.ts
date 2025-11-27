@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { EVALUATION_CRITERIA } from '../constants';
 import { AnalysisResult, TeacherScore } from '../types';
 
-// Key for local storage (Kept to prevent breaking other files imports, but unused here)
+// Key for local storage
 export const API_KEY_STORAGE_KEY = 'user_gemini_api_key';
 
 interface FilePart {
@@ -18,8 +18,8 @@ export const analyzeTeacherPortfolio = async (
   evidenceFiles: FilePart[]
 ): Promise<AnalysisResult> => {
   
-  // Key must be obtained exclusively from environment variable
-  const apiKey = process.env.API_KEY;
+  // Retrieve Key from Local Storage
+  const apiKey = localStorage.getItem(API_KEY_STORAGE_KEY);
 
   if (!apiKey) {
     throw new Error("API_KEY_MISSING");
