@@ -3,7 +3,7 @@ import React, { useEffect } from 'react';
 import { Teacher } from '../types';
 import { EVALUATION_CRITERIA } from '../constants';
 import { logAction } from '../services/auditService';
-import { X, Printer, FileText, Image as ImageIcon, File, FolderOpen, FileSpreadsheet } from 'lucide-react';
+import { X, Printer, FileText } from 'lucide-react';
 
 interface TeacherReportProps {
   teacher: Teacher;
@@ -31,15 +31,6 @@ export const TeacherReport: React.FC<TeacherReportProps> = ({ teacher, onClose, 
   const handlePrint = () => {
     logAction('REPORT', `طباعة التقرير التفصيلي للمعلم: ${teacher.name}`);
     window.print();
-  };
-
-  const getFileIcon = (fileName: string) => {
-    const ext = fileName.split('.').pop()?.toLowerCase();
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext || '')) return <ImageIcon className="w-4 h-4 text-purple-600" />;
-    if (['pdf'].includes(ext || '')) return <FileText className="w-4 h-4 text-red-600" />;
-    if (['doc', 'docx'].includes(ext || '')) return <FileText className="w-4 h-4 text-blue-600" />;
-    if (['xls', 'xlsx', 'csv'].includes(ext || '')) return <FileSpreadsheet className="w-4 h-4 text-emerald-600" />;
-    return <File className="w-4 h-4 text-slate-400" />;
   };
 
   // Logic to determine container classes based on mode
@@ -133,28 +124,6 @@ export const TeacherReport: React.FC<TeacherReportProps> = ({ teacher, onClose, 
                <span className={`text-xl font-bold ${gradeColor} print:text-black border-b border-dotted border-slate-400 print:border-slate-600 flex-1`}>
                  {totalScore}% ({gradeText})
                </span>
-             </div>
-          </div>
-
-          {/* قائمة الملفات (محسن) */}
-          <div className="mb-8 break-inside-avoid">
-             <h3 className="font-bold text-slate-800 print:text-black mb-3 flex items-center gap-2 border-b border-slate-200 print:border-black pb-2">
-                <FolderOpen className="w-5 h-5 text-indigo-600 print:text-black" />
-                قائمة الشواهد والملفات ({teacher.files.length})
-             </h3>
-             <div className="bg-slate-50 print:bg-transparent border border-slate-200 print:border-black rounded-lg p-4 max-h-60 overflow-y-auto print:max-h-none print:overflow-visible">
-                {teacher.files.length > 0 ? (
-                    <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2">
-                        {teacher.files.map((file, idx) => (
-                            <li key={idx} className="flex items-center gap-2 text-sm text-slate-700 print:text-black p-1.5 bg-white print:bg-transparent rounded border border-slate-100 print:border-slate-300 shadow-sm print:shadow-none">
-                                {getFileIcon(file)}
-                                <span className="truncate flex-1 font-mono text-xs" dir="ltr" title={file}>{file}</span>
-                            </li>
-                        ))}
-                    </ul>
-                ) : (
-                    <p className="text-slate-400 text-sm text-center py-4">لا توجد ملفات مرفقة لعرضها.</p>
-                )}
              </div>
           </div>
 
