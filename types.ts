@@ -17,6 +17,14 @@ export interface TeacherScore {
   justification: string;
 }
 
+export interface Prediction {
+  category: string;
+  description: string;
+  impact: 'High' | 'Medium' | 'Low';
+  confidence: number; // 0-100
+  timeframe: string;
+}
+
 export interface Teacher {
   id: string;
   name: string;
@@ -26,12 +34,14 @@ export interface Teacher {
   scores?: TeacherScore[];
   totalScore?: number;
   aiAnalysis?: string;
+  predictions?: Prediction[];
   status: 'pending' | 'analyzing' | 'completed' | 'error';
 }
 
 export interface AnalysisResult {
   scores: TeacherScore[];
   summary: string;
+  predictions: Prediction[];
 }
 
 export interface AuditLogEntry {
@@ -39,12 +49,4 @@ export interface AuditLogEntry {
   timestamp: number;
   action: 'UPLOAD' | 'ANALYSIS' | 'REPORT' | 'EXPORT' | 'SYSTEM';
   details: string;
-}
-
-// Extend HTMLInputElement to support webkitdirectory
-declare module 'react' {
-  interface InputHTMLAttributes<T> {
-    webkitdirectory?: string;
-    directory?: string;
-  }
 }

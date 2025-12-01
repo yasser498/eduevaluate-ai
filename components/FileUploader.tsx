@@ -71,8 +71,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({ onFilesSelected }) =
             ref={inputRef}
             type="file"
             className="hidden"
-            webkitdirectory=""
-            directory=""
+            {...({ webkitdirectory: "", directory: "" } as any)}
             multiple
             onChange={handleChange}
           />

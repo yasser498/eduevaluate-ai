@@ -1,6 +1,5 @@
-
-import React, { useMemo } from 'react';
-import { Teacher } from '../types';
+import React, { useMemo, useState } from 'react';
+import { Teacher, Prediction } from '../types';
 import { EVALUATION_CRITERIA } from '../constants';
 import { logAction } from '../services/auditService';
 import { 
@@ -17,7 +16,19 @@ import {
   PolarRadiusAxis,
   Radar
 } from 'recharts';
-import { Award, TrendingUp, Users, Printer, Download, Files } from 'lucide-react';
+import { 
+  Award, 
+  TrendingUp, 
+  Users, 
+  Printer, 
+  Download, 
+  Files, 
+  Sparkles, 
+  Filter, 
+  Zap, 
+  AlertTriangle, 
+  CheckCircle2 
+} from 'lucide-react';
 
 interface DashboardProps {
   teachers: Teacher[];
@@ -26,6 +37,10 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ teachers, onPrintAll }) => {
   const completedTeachers = teachers.filter(t => t.status === 'completed');
+  
+  // Interaction States
+  const [minConfidence, setMinConfidence] = useState<number>(50);
+  const [selectedImpacts, setSelectedImpacts] = useState<string[]>(['High', 'Medium', 'Low']);
 
   // Calculate Average Score per Criteria
   const criteriaAverages = useMemo(() => {
@@ -38,7 +53,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ teachers, onPrintAll }) =>
       }, 0);
       
       return {
-        name: criteria.nameAr, // Use Arabic Name
+        name: criteria.nameAr,
         nameEn: criteria.nameEn,
         average: Number((totalScore / completedTeachers.length).toFixed(1)),
         fullMark: 10
@@ -58,10 +73,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ teachers, onPrintAll }) =>
     return [...completedTeachers].sort((a, b) => (b.totalScore || 0) - (a.totalScore || 0))[0];
   }, [completedTeachers]);
 
+  // Aggregate Predictions
+  const allPredictions = useMemo(() => {
+    let preds: { teacherName: string, data: Prediction }[] = [];
+    completedTeachers.forEach(t => {
+      if (t.predictions) {
+        t.predictions.forEach(p => {
+          preds.push({ teacherName: t.name, data: p });
+        });
+      }
+    });
+    return preds;
+  }, [completedTeachers]);
+
+  const filteredPredictions = useMemo(() => {
+    return allPredictions.filter(p => 
+      p.data.confidence >= minConfidence && 
+      selectedImpacts.includes(p.data.impact)
+    );
+  }, [allPredictions, minConfidence, selectedImpacts]);
+
+  const handleImpactToggle = (impact: string) => {
+    setSelectedImpacts(prev => 
+      prev.includes(impact) ? prev.filter(i => i !== impact) : [...prev, impact]
+    );
+  };
+
   const handleExportCSV = () => {
     logAction('EXPORT', 'تصدير بيانات التقييم الشاملة بصيغة CSV');
-    
-    // Add BOM for Excel Arabic support
     const BOM = "\uFEFF";
     const headers = ['اسم المعلم', 'الدرجة الكلية', ...EVALUATION_CRITERIA.map(c => c.nameAr)];
     const rows = completedTeachers.map(t => [
@@ -69,12 +108,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ teachers, onPrintAll }) =>
       t.totalScore,
       ...EVALUATION_CRITERIA.map(c => t.scores?.find(s => s.criteriaId === c.id)?.score || 0)
     ]);
-    
-    const csvContent = BOM + [
-      headers.join(','),
-      ...rows.map(r => r.join(','))
-    ].join('\n');
-    
+    const csvContent = BOM + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -102,75 +136,140 @@ export const Dashboard: React.FC<DashboardProps> = ({ teachers, onPrintAll }) =>
       {/* Action Bar */}
       <div className="flex justify-end gap-2 print:hidden">
         {onPrintAll && (
-           <button 
-            onClick={onPrintAll}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold transition-colors shadow-sm"
-          >
-            <Files className="w-4 h-4" />
-            طباعة الكل ({completedTeachers.length})
+           <button onClick={onPrintAll} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold transition-colors shadow-sm">
+            <Files className="w-4 h-4" /> طباعة الكل ({completedTeachers.length})
           </button>
         )}
-        <button 
-          onClick={handleExportCSV}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-sm font-bold transition-colors border border-indigo-200"
-        >
-          <Download className="w-4 h-4" />
-          تصدير Excel
+        <button onClick={handleExportCSV} className="flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-sm font-bold transition-colors border border-indigo-200">
+          <Download className="w-4 h-4" /> تصدير Excel
         </button>
-        <button 
-          onClick={handlePrintSummary}
-          className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold transition-colors"
-        >
-          <Printer className="w-4 h-4" />
-          طباعة الملخص
+        <button onClick={handlePrintSummary} className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold transition-colors">
+          <Printer className="w-4 h-4" /> طباعة الملخص
         </button>
       </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 print:grid-cols-3">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 print:border-slate-300 flex items-center gap-4 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-24 h-24 bg-blue-50 print:bg-transparent rounded-br-full -ml-4 -mt-4 z-0"></div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 print:border-slate-300 flex items-center gap-4 relative overflow-hidden group hover:shadow-md transition-shadow">
+          <div className="absolute top-0 left-0 w-24 h-24 bg-blue-50 print:bg-transparent rounded-br-full -ml-4 -mt-4 z-0 group-hover:scale-110 transition-transform"></div>
           <div className="p-4 bg-blue-100 text-blue-600 print:text-black print:bg-transparent rounded-xl z-10">
             <Users className="w-6 h-6" />
           </div>
           <div className="z-10">
-            <p className="text-sm text-slate-500 font-bold mb-1 print:text-black">عدد المعلمين المقيمين</p>
+            <p className="text-sm text-slate-500 font-bold mb-1 print:text-black">عدد المعلمين</p>
             <h3 className="text-3xl font-bold text-slate-800 print:text-black">{completedTeachers.length}</h3>
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 print:border-slate-300 flex items-center gap-4 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-24 h-24 bg-emerald-50 print:bg-transparent rounded-br-full -ml-4 -mt-4 z-0"></div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 print:border-slate-300 flex items-center gap-4 relative overflow-hidden group hover:shadow-md transition-shadow">
+          <div className="absolute top-0 left-0 w-24 h-24 bg-emerald-50 print:bg-transparent rounded-br-full -ml-4 -mt-4 z-0 group-hover:scale-110 transition-transform"></div>
           <div className="p-4 bg-emerald-100 text-emerald-600 print:text-black print:bg-transparent rounded-xl z-10">
             <Award className="w-6 h-6" />
           </div>
           <div className="z-10 w-full">
              <p className="text-sm text-slate-500 font-bold mb-1 print:text-black">الأعلى أداءً</p>
              <div className="flex justify-between items-end w-full gap-4">
-                <h3 className="text-xl font-bold text-slate-800 truncate max-w-[150px] print:text-black" title={topPerformer?.name}>
-                  {topPerformer?.name || '-'}
-                </h3>
+                <h3 className="text-xl font-bold text-slate-800 truncate max-w-[150px] print:text-black" title={topPerformer?.name}>{topPerformer?.name || '-'}</h3>
                 {topPerformer && <span className="text-lg font-bold text-emerald-600 print:text-black">{topPerformer.totalScore}%</span>}
              </div>
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 print:border-slate-300 flex items-center gap-4 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-24 h-24 bg-indigo-50 print:bg-transparent rounded-br-full -ml-4 -mt-4 z-0"></div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 print:border-slate-300 flex items-center gap-4 relative overflow-hidden group hover:shadow-md transition-shadow">
+          <div className="absolute top-0 left-0 w-24 h-24 bg-indigo-50 print:bg-transparent rounded-br-full -ml-4 -mt-4 z-0 group-hover:scale-110 transition-transform"></div>
           <div className="p-4 bg-indigo-100 text-indigo-600 print:text-black print:bg-transparent rounded-xl z-10">
             <TrendingUp className="w-6 h-6" />
           </div>
           <div className="z-10">
-            <p className="text-sm text-slate-500 font-bold mb-1 print:text-black">متوسط الأداء العام</p>
+            <p className="text-sm text-slate-500 font-bold mb-1 print:text-black">المتوسط العام</p>
             <h3 className="text-3xl font-bold text-slate-800 print:text-black">{overallAverage}%</h3>
           </div>
+        </div>
+      </div>
+
+      {/* Predictions Section - INTERACTIVE */}
+      <div className="bg-gradient-to-br from-indigo-900 to-slate-900 text-white p-6 rounded-2xl shadow-lg print:break-inside-avoid">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+          <div>
+            <h3 className="text-xl font-bold flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-yellow-400" />
+              التوقعات المستقبلية الذكية
+            </h3>
+            <p className="text-indigo-200 text-sm mt-1">تنبؤات مبنية على تحليل الاتجاهات الحالية في ملفات المعلمين</p>
+          </div>
+
+          {/* Controls */}
+          <div className="flex flex-col sm:flex-row gap-4 items-center bg-white/10 p-3 rounded-xl border border-white/10 print:hidden">
+            
+            {/* Confidence Slider */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-medium text-indigo-200">نسبة الثقة: {minConfidence}%+</span>
+              <input 
+                type="range" 
+                min="0" 
+                max="90" 
+                step="10" 
+                value={minConfidence}
+                onChange={(e) => setMinConfidence(parseInt(e.target.value))}
+                className="w-24 h-1.5 bg-indigo-900 rounded-lg appearance-none cursor-pointer accent-yellow-400"
+              />
+            </div>
+
+            <div className="w-px h-8 bg-white/20 hidden sm:block"></div>
+
+            {/* Impact Filter */}
+            <div className="flex items-center gap-2">
+               <span className="text-xs font-medium text-indigo-200 flex items-center gap-1"><Filter className="w-3 h-3"/> التأثير:</span>
+               {(['High', 'Medium', 'Low'] as const).map(impact => (
+                 <button
+                   key={impact}
+                   onClick={() => handleImpactToggle(impact)}
+                   className={`px-2 py-1 rounded-md text-xs font-bold transition-all ${
+                      selectedImpacts.includes(impact) 
+                        ? impact === 'High' ? 'bg-red-500 text-white' : impact === 'Medium' ? 'bg-amber-500 text-white' : 'bg-blue-500 text-white'
+                        : 'bg-white/5 text-slate-400 hover:bg-white/20'
+                   }`}
+                 >
+                   {impact === 'High' ? 'عالي' : impact === 'Medium' ? 'متوسط' : 'منخفض'}
+                 </button>
+               ))}
+            </div>
+          </div>
+        </div>
+        
+        {/* Prediction Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+           {filteredPredictions.length > 0 ? filteredPredictions.slice(0, 6).map((item, idx) => (
+             <div key={idx} className="bg-white/10 backdrop-blur-sm border border-white/10 rounded-xl p-4 hover:bg-white/20 transition-all group">
+               <div className="flex justify-between items-start mb-2">
+                 <span className="text-xs font-bold text-indigo-200 bg-indigo-900/50 px-2 py-0.5 rounded-full">{item.data.category}</span>
+                 {item.data.impact === 'High' && <Zap className="w-4 h-4 text-red-400" />}
+                 {item.data.impact === 'Medium' && <AlertTriangle className="w-4 h-4 text-amber-400" />}
+                 {item.data.impact === 'Low' && <CheckCircle2 className="w-4 h-4 text-blue-400" />}
+               </div>
+               <p className="text-sm font-medium leading-relaxed mb-3">{item.data.description}</p>
+               <div className="flex items-center justify-between mt-auto pt-3 border-t border-white/10">
+                 <span className="text-xs text-indigo-300">{item.teacherName}</span>
+                 <div className="flex items-center gap-2" title={`نسبة الثقة: ${item.data.confidence}%`}>
+                    <div className="w-16 h-1.5 bg-indigo-900 rounded-full overflow-hidden">
+                       <div className="h-full bg-yellow-400" style={{ width: `${item.data.confidence}%` }}></div>
+                    </div>
+                    <span className="text-xs font-bold text-yellow-400">{item.data.confidence}%</span>
+                 </div>
+               </div>
+             </div>
+           )) : (
+             <div className="col-span-full py-8 text-center text-indigo-300 border border-dashed border-white/20 rounded-xl">
+               لا توجد توقعات تطابق معايير التصفية الحالية.
+             </div>
+           )}
         </div>
       </div>
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 print:block print:space-y-6">
         
-        {/* Radar Chart - Criteria Balance */}
+        {/* Radar Chart */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 break-inside-avoid print:border-slate-300">
           <div className="flex justify-between items-center mb-6">
              <h3 className="text-lg font-bold text-slate-800 print:text-black">تحليل التوازن في المعايير</h3>
@@ -181,56 +280,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ teachers, onPrintAll }) =>
                 <PolarGrid stroke="#e2e8f0" strokeWidth={1} />
                 <PolarAngleAxis dataKey="name" tick={{ fontSize: 10, fill: '#000000', fontWeight: 'bold' }} />
                 <PolarRadiusAxis angle={30} domain={[0, 10]} stroke="#cbd5e1" />
-                <Radar
-                  name="متوسط الدرجة"
-                  dataKey="average"
-                  stroke="#4f46e5"
-                  strokeWidth={3}
-                  fill="#4f46e5"
-                  fillOpacity={0.4}
-                />
-                <Tooltip 
-                   formatter={(value: number) => [`${value}/10`, 'المتوسط']}
-                   contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', textAlign: 'right' }}
-                />
+                <Radar name="متوسط الدرجة" dataKey="average" stroke="#4f46e5" strokeWidth={3} fill="#4f46e5" fillOpacity={0.4} />
+                <Tooltip formatter={(value: number) => [`${value}/10`, 'المتوسط']} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', textAlign: 'right' }} />
               </RadarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Bar Chart - Strengths & Weaknesses */}
+        {/* Bar Chart */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 break-inside-avoid print:border-slate-300">
           <div className="flex justify-between items-center mb-6">
              <h3 className="text-lg font-bold text-slate-800 print:text-black">الأداء حسب الفئة</h3>
           </div>
           <div className="h-80 w-full" dir="ltr">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={criteriaAverages}
-                layout="vertical"
-                margin={{ top: 5, right: 30, left: 10, bottom: 5 }}
-              >
+              <BarChart data={criteriaAverages} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
                 <XAxis type="number" domain={[0, 10]} hide />
-                <YAxis 
-                  dataKey="name" 
-                  type="category" 
-                  width={150} 
-                  tick={{ fontSize: 11, fill: '#000000', fontWeight: 600 }}
-                  orientation="right" 
-                />
-                <Tooltip 
-                   cursor={{ fill: '#f8fafc' }}
-                   contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', direction: 'rtl' }}
-                />
-                <Bar 
-                  dataKey="average" 
-                  name="الدرجة" 
-                  fill="#3b82f6" 
-                  radius={[4, 0, 0, 4]} 
-                  barSize={18} 
-                  background={{ fill: '#f8fafc' }}
-                />
+                <YAxis dataKey="name" type="category" width={150} tick={{ fontSize: 11, fill: '#000000', fontWeight: 600 }} orientation="right" />
+                <Tooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', direction: 'rtl' }} />
+                <Bar dataKey="average" name="الدرجة" fill="#3b82f6" radius={[4, 0, 0, 4]} barSize={18} background={{ fill: '#f8fafc' }} />
               </BarChart>
             </ResponsiveContainer>
           </div>

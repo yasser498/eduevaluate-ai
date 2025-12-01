@@ -115,7 +115,7 @@ export default function App() {
     // 2. MERGE LOGIC: Merge new structure with existing data
     setTeachers(prevTeachers => {
       // Create a map of existing teachers for easy lookup
-      const existingMap = new Map(prevTeachers.map(t => [t.name, t]));
+      const existingMap = new Map<string, Teacher>(prevTeachers.map(t => [t.name, t]));
       
       const mergedTeachers: Teacher[] = [];
 

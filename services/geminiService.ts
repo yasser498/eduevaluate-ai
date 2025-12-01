@@ -2,9 +2,6 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { EVALUATION_CRITERIA } from '../constants';
 import { AnalysisResult, TeacherScore } from '../types';
 
-// Key for local storage (Kept to prevent breaking other files imports, but unused here)
-export const API_KEY_STORAGE_KEY = 'user_gemini_api_key';
-
 interface FilePart {
   inlineData: {
     mimeType: string;
@@ -48,16 +45,13 @@ export const analyzeTeacherPortfolio = async (
     1. **قائمة الملفات**: تخبرك بما هو "موجود" وهل المعلم منظم أم لا.
     2. **محتوى العينات المرفقة**: (إن وجدت) تخبرك بـ "جودة" العمل (هل هو حقيقي، هل هو معبأ بشكل صحيح، أم فارغ).
 
-    المطلوب: تقييم المعلم وفقاً للمعايير الـ 11 بدقة.
-    
-    دليل الدرجات (0-10):
-    - 0-2: الملفات مفقودة تماماً في القائمة.
-    - 3-5: الملفات موجودة كاسم ولكن المحتوى (إذا تم ارفاقه) ضعيف أو غير مكتمل، أو التنظيم عشوائي.
-    - 6-8: الملفات موجودة ومنظمة، والمحتوى المقروء جيد.
-    - 9-10: الملفات شاملة، والمحتوى المقروء احترافي جداً ومتميز.
+    المطلوب: 
+    1. تقييم المعلم وفقاً للمعايير الـ 11 بدقة (0-10).
+    2. كتابة ملخص شامل لنقاط القوة والضعف.
+    3. **استنتاج 3-5 توقعات مستقبلية** لأداء المعلم (مثلاً: احتمالية الترشح لجائزة تميز، الحاجة لتدريب مكثف، تطور في استخدام التقنية) مع تحديد نسبة الثقة في هذا التوقع ومستوى تأثيره.
 
     **مهم جداً**:
-    - في خانة "justification" (المبررات)، يجب أن تذكر دليلاً ملموساً. إذا قرأت محتوى ملف مرفق، اذكر ذلك (مثال: "اطلعت على محتوى الخطة العلاجية ووجدتها تفصيلية..."). إذا حكمت بناءً على اسم الملف فقط، اذكر ذلك.
+    - في خانة "justification" (المبررات)، يجب أن تذكر دليلاً ملموساً.
     - كن حازماً ولكن عادلاً.
     - يجب أن تكون اللغة عربية فصحى ورسمية.
   `;
@@ -102,7 +96,20 @@ export const analyzeTeacherPortfolio = async (
                 }
               }
             },
-            summary: { type: Type.STRING }
+            summary: { type: Type.STRING },
+            predictions: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  category: { type: Type.STRING, description: "مجال التوقع (مثلاً: التطوير المهني، نواتج التعلم)" },
+                  description: { type: Type.STRING },
+                  impact: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                  confidence: { type: Type.NUMBER, description: "Confidence percentage 0-100" },
+                  timeframe: { type: Type.STRING, description: "مثلاً: خلال الفصل القادم، نهاية العام" }
+                }
+              }
+            }
           }
         }
       }
@@ -117,7 +124,6 @@ export const analyzeTeacherPortfolio = async (
   } catch (error: any) {
     console.error("Error analyzing teacher:", error);
     
-    // Propagate API Key errors specifically
     if (error.message === "API_KEY_MISSING" || error.status === 403 || error.message?.includes('API key')) {
       throw new Error("API_KEY_INVALID");
     }
@@ -128,7 +134,8 @@ export const analyzeTeacherPortfolio = async (
         score: 0,
         justification: "فشل التحليل بسبب خطأ تقني أو حجم الملفات."
       })),
-      summary: "لم يتم استكمال التحليل بشكل صحيح."
+      summary: "لم يتم استكمال التحليل بشكل صحيح.",
+      predictions: []
     };
   }
 };
